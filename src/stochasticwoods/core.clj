@@ -233,56 +233,58 @@
                     (into [] (take 300 response))
                     (into [] (nthrest data 300))
                     (into [] (nthrest response 300)))
-(def forest (build-forest data response))
-(time (count forest))
-(predict-from-forest (map :tree forest) (last data))
-(last response)
-(def t (build-decision-tree data response))
-(classify-from-tree t [:female 100])
-(time (predict-from-forest (repeat 1000 t) [:male 50]))
 
-(def blah (read-string (slurp "/home/kanderson/Downloads/test.edn")))
-(def data (map #(dissoc % :new_tumor_event_after_initial_treatment)
-               blah))
-(def response (map :new_tumor_event_after_initial_treatment blah))
 
-(def f "/home/kanderson/Code/Bioinformatics/lung_risk/missing_filled_with_year.csv")
-(def foo (with-open [rdr (clojure.java.io/reader f)]
-           (let [l (line-seq rdr)
-                 ks (map keyword
-                         (clojure.string/split (first l)
-                                               #","))
-                 f (fn [row] (map read-string
-                                 (clojure.string/split row #",")))
-                 f2 (fn [row] (zipmap ks (f row)))]
-             (mapv f2 (rest l)))))
-(def data (mapv #(dissoc % :new_tumor_event_after_initial_treatment)
-                foo))
-(def response (mapv :new_tumor_event_after_initial_treatment foo))
-(time (build-decision-tree data response))
+;; (def forest (build-forest data response))
+;; (time (count forest))
+;; (predict-from-forest (map :tree forest) (last data))
+;; (last response)
+;; (def t (build-decision-tree data response))
+;; (classify-from-tree t [:female 100])
+;; (time (predict-from-forest (repeat 1000 t) [:male 50]))
 
-(def data
-  (into []
-        (repeatedly 1000 #(if (> 0.5 (rand))
-                            [:male (rand-int 100)]
-                            [:female (rand-int 100)]))))
-(def response
-  (mapv (fn [[s a]] (if (= s :male)
-                     (if (> a 80)
-                       :yes
-                       (if (< (rand) 0.8)
-                         :no
-                         :yes))
-                     :no))
-        data))
+;; (def blah (read-string (slurp "/home/kanderson/Downloads/test.edn")))
+;; (def data (map #(dissoc % :new_tumor_event_after_initial_treatment)
+;;                blah))
+;; (def response (map :new_tumor_event_after_initial_treatment blah))
 
-(infer-datatypes data)
-(frequencies response)
-(time (build-decision-tree data response))
-(second (adjacency-list (build-decision-tree data response)))
-(spit "/home/kanderson/Downloads/foobar.dot"
-      (dot-format (build-decision-tree data response
-                                       :columnkeys [:tumor_weight])))
+;; (def f "/home/kanderson/Code/Bioinformatics/lung_risk/missing_filled_with_year.csv")
+;; (def foo (with-open [rdr (clojure.java.io/reader f)]
+;;            (let [l (line-seq rdr)
+;;                  ks (map keyword
+;;                          (clojure.string/split (first l)
+;;                                                #","))
+;;                  f (fn [row] (map read-string
+;;                                  (clojure.string/split row #",")))
+;;                  f2 (fn [row] (zipmap ks (f row)))]
+;;              (mapv f2 (rest l)))))
+;; (def data (mapv #(dissoc % :new_tumor_event_after_initial_treatment)
+;;                 foo))
+;; (def response (mapv :new_tumor_event_after_initial_treatment foo))
+;; (time (build-decision-tree data response))
+
+;; (def data
+;;   (into []
+;;         (repeatedly 1000 #(if (> 0.5 (rand))
+;;                             [:male (rand-int 100)]
+;;                             [:female (rand-int 100)]))))
+;; (def response
+;;   (mapv (fn [[s a]] (if (= s :male)
+;;                      (if (> a 80)
+;;                        :yes
+;;                        (if (< (rand) 0.8)
+;;                          :no
+;;                          :yes))
+;;                      :no))
+;;         data))
+
+;; (infer-datatypes data)
+;; (frequencies response)
+;; (time (build-decision-tree data response))
+;; (second (adjacency-list (build-decision-tree data response)))
+;; (spit "/home/kanderson/Downloads/foobar.dot"
+;;       (dot-format (build-decision-tree data response
+;;                                        :columnkeys [:tumor_weight])))
 
 
 
