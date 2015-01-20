@@ -45,38 +45,21 @@
      (fn [n]
        (map (fn [p]
               (if (= :categorical (datatypes n))
-                [(fn [x] (= (get x n) p)) (str "[" (labels n) "] == " p)]
-                [(fn [x] (<= (get x n) p)) (str "[" (labels n) "] <= " p)]))
+                [(fn [x] (= (get x n) p)) (str "[" (labels n) "] == " p) (labels n)]
+                [(fn [x] (<= (get x n) p)) (str "[" (labels n) "] <= " p) (labels n)]))
             (datasets n))))))
 
-;; (defn- partition-data-by-breakfn
-;;   "This ugly function sorts the data into
-;;   two bins using the break function."
-;;   [data response]
-;;   (let [m (count data)]
-;;     (fn [[bfn s]]
-;;       (loop [leftd (list)
-;;              rightd (list)
-;;              leftr (list)
-;;              rightr (list)
-;;              i 0]
-;;         (if (< i m)
-;;           (if (bfn (nth data i))
-;;             (recur (conj leftd (nth data i))
-;;                    rightd
-;;                    (conj leftr (nth response i))
-;;                    rightr
-;;                    (inc i))
-;;             (recur leftd
-;;                    (conj rightd (nth data i))
-;;                    leftr
-;;                    (conj rightr (nth response i))
-;;                    (inc i)))
-;;           [[leftd leftr] [rightd rightr]])))))
-
-(defn- special-assoc!
-  [m k v]
-  (assoc! m k (inc (get m k 0))))
+(defn- break-fns
+  ([data ks] (break-fns data ks identity (infer-datatypes data)))
+  ([data ks labels] (break-fns data ks labels (infer-datatypes data)))
+  ([data ks labels datatypes]
+   (let [datasets (infer-possible-vals data ks)]
+     (fn [n]
+       (map (fn [p]
+              (if (= :categorical (datatypes n))
+                [(fn [x] (= (get x n) p)) (str "[" (labels n) "] == " p) (labels n)]
+                [(fn [x] (<= (get x n) p)) (str "[" (labels n) "] <= " p) (labels n)]))
+            (datasets n))))))
 
 (defn- partition-data-by-breakfn
   "This ugly function sorts the data into
@@ -99,7 +82,7 @@
                      rightd
                      (conj leftr r)
                      rightr
-                     (special-assoc! lvals r 1)
+                     (assoc! lvals r (inc (get lvals r 0)))
                      rvals
                      (inc i))
               (recur leftd
@@ -107,7 +90,7 @@
                      leftr
                      (conj rightr r)
                      lvals
-                     (special-assoc! rvals r 1)
+                     (assoc! rvals r (inc (get rvals r 0)))
                      (inc i))))
           [[leftd leftr (persistent! lvals)]
            [rightd rightr (persistent! rvals)]])))))
@@ -124,7 +107,7 @@
   [f n]
   (- 1 (reduce + (map (fn [[k v]] (square (/ v n))) f))))
 
-(defn gini-impurity-after-break
+(defn- gini-impurity-after-break
   [[[ld lr lv] [rd rr rv]]]
   (let [nlr (count lr)
         nrr (count rr)
@@ -165,8 +148,9 @@
           gi :as d] (reduce (partial min-key last)
                             allbreaks)]
      (cond
-       (<= gi0 gi) {:freqs (frequencies response)}
-       :else (list {:partition-fn mf :gini-inequality gi
+       (<= gi0 gi) {:freqs (frequencies response)
+                   :gini-inequality gi0}
+       :else (list {:partition-fn mf :gini-inequality gi0
                     :freqs (merge-with + lv rv)}
                    (build-decision-tree (into [] lpd) (into [] lpr)
                                         columnkeys labels datatypes)
@@ -191,33 +175,6 @@
                                       [[n (first (first (first al)))]
                                        (first t) side])))]
          (concat (f left lal true) (f right ral false))))))
-
-
-;; (defn dot-format
-;;   ([tree]
-;;    (let [al (adjacency-list tree)
-;;          edges (map first al)
-;;          sides (map #(nth % 2) al)
-;;          fs (fn [id node]
-;;               (str id
-;;                    " [label=\""
-;;                    (node :freqs)
-;;                    (if (map? node)
-;;                      (str node "\"")
-;;                      (str (second (node :partition-fn)) "\", shape=\"box\""))
-;;                    "];\n"))]
-;;      (str
-;;       "digraph Tree {\n"
-;;       (fs 1 (first tree))
-;;       (reduce str
-;;               (map (fn [[[e1 e2] node]] (fs e2 node)) al))
-;;       (reduce str
-;;               (map (fn [[e1 e2] s] (str e1 " -> " e2
-;;                                        " [label=\""
-;;                                        s
-;;                                        "\"];\n"))
-;;                    edges sides))
-;;       "}"))))
 
 (defn dot-format
   ([tree]
@@ -253,8 +210,6 @@
                    "dot" "-Tpdf" :in dot :out-enc :bytes))]
     (clojure.java.shell/sh "display" :in pdf)))
 
-
-
 ;; Predictions
 (defn predict-from-tree
   [[root & subtree] x]
@@ -278,15 +233,6 @@
                  (predict-from-forest forest x))))
 
 ;; Evaluation
-;; (defn train-and-validate
-;;   [traindata trainresponse testdata testresponse]
-;;   (let [dtree (build-decision-tree traindata trainresponse)
-;;         [tpos fpos tneg fneg] [0 0 0 0]
-;;         f (fn [x r] (if (= (classify-from-tree dtree x) r)
-;;                      :correct
-;;                      :incorrect))]
-;;     (frequencies (map f testdata testresponse))))
-
 (defn sample-with-replacement
   [s n]
   (let [v (if (vector? s) s (into [] s))
@@ -301,12 +247,12 @@
   [data response labels]
   (let [ks (vec (if (map? (first data)) (keys (first data))
                     (range (count (first data)))))
-        ntrees 500
+        ntrees 1000
         datatypes (infer-datatypes data)
         indices (vec (range (count data)))
         nsamples (int (/ (count data) 1))
         nfeatures (min (count ks)
-                       (+ 2 (int (java.lang.Math/sqrt (count ks)))))
+                       (+ 4 (int (java.lang.Math/sqrt (count ks)))))
         samplefn (fn [] [(sample-with-replacement indices nsamples)
                         (sample-without-replacement ks nfeatures)])
         dfn (fn [d sinds] (mapv (partial get d) sinds))
@@ -317,8 +263,8 @@
                                  (zipmap features (dfn labels features))
                                  datatypes))]
     (take ntrees
-          (map #(do (print %2)
-                    (hash-map :features (second %1)
+          (pmap #(do (println %2)
+                     (hash-map :features (second %1)
                               :indices (first %1)
                               :tree (f %1)))
                (repeatedly samplefn)
@@ -333,11 +279,50 @@
                      :incorrect))]
     (frequencies (map f testdata testresponse))))
 
+(defn roc-curve
+  [forest category_key testdata testresponses]
+  (let [f (fn [m] (/ (get m category_key)
+                    (apply + (map second m))))
+        l (map (comp f (partial predict-from-forest forest))
+               testdata)
+        f3 (fn [pred actual] (= pred actual))
+        f4 (fn [pred actual] (if (= pred category_key)
+                              (if (= pred actual)
+                                {:true-positive 1}
+                                {:false-positive 1})
+                              (if (= actual category_key)
+                                {:false-negative 1}
+                                {:true-negative 1})))
+        f2 (fn [threshold] (apply merge-with +
+                                 (map #(f4 (if (>= %1 threshold)
+                                             category_key
+                                             nil)
+                                           %2)
+                                      l testresponses)))
+        errors (map f2 (range 0 1 0.1))
+        n (count testresponses)
+        tot+ ((frequencies
+               (map #(= % category_key) testresponses))
+              true)
+        tot- (- n tot+)]
+    [(map #(/ (get % :false-positive 0) tot-) errors)
+     (map #(/ (get % :true-positive 0) tot+) errors)]))
+    
+(defn calc-auc
+  [[false_pos true_pos]]
+  (apply +
+         (map (fn [[fp1 fp2] [tp1 tp2]]
+                (* (- fp1 fp2)
+                   (* 0.5 (+ tp1 tp2))))
+              (partition 2 1 false_pos)
+              (partition 2 1 true_pos))))
+
 (defn permute-variable
   [data feature_key]
   (let [v (map #(get % feature_key) data)
         f (fn [row pval] (assoc row feature_key pval))]
     (mapv f data (shuffle v))))
+
 
 (defn- var-imp
   [data tree oob_indices]
@@ -369,15 +354,49 @@
         (apply merge
                (map f features))))))
 
-(defn calc-var-importance
-  [data forest]
-  (let [f (var-imp-tree data)
-        mean (fn [a b] (* 0.5 (+ a b)))]
-    (apply merge-with mean (map #(do (print %2) (f %1))
-                                forest (range)))))
+(defn gini-decrease
+  [{t :tree}]
+  (letfn [(func [tree]
+            (if (not (list? tree))
+              [(tree :gini-inequality) {}]
+              (let [[root left right] tree
+                    gi (root :gini-inequality)
+                    lsubtree (func left)
+                    rsubtree (func right)
+                    mean (fn [a b] (* 0.5 (+ a b)))
+                    f (fn [[g rem]]
+                        (merge-with +
+                                    {(last (root :partition-fn))
+                                     (float (- gi g))}
+                                    rem))]
+                [gi (merge-with + (f lsubtree) (f rsubtree))])))]
+    (second (func t))))
 
-(doseq [a (sort-by second (time (calc-var-importance data forest)))]
+
+(defn calc-var-importance
+  [data forest & {:keys [importance_fn]
+                  :or {importance_fn (var-imp-tree data)}}]
+  (let [mean (fn [a b] (* 0.5 (+ a b)))]
+    (apply merge-with mean (pmap #(do (println %2) (importance_fn %1))
+                                 forest (range)))))
+
+
+
+(doseq [a (sort-by second (time (calc-var-importance data2 forest2 :importance_fn gini-decrease)))]
   (println a))
+
+(def forest2 (build-forest data2 response2
+                           (zipmap (keys (first data2))
+                                   (keys (first data2)))))
+(count forest2)
+(let [foo (into [] (sort-by second
+                            (time (calc-var-importance data forest
+                                                       :importance_fn gini-decrease))))
+      n (count foo)]
+  (doseq [a (subvec foo (- n 100))]
+    ;;(println (gene_list (first a)) (second a))
+    (println a)
+    ))
 
 
 (println
@@ -393,8 +412,7 @@
                           response
                           ;;(zipmap (range) gene_list)
                           (zipmap (keys (first data))
-                                  (keys (first data)))
-                          ))
+                                  (keys (first data)))))
 (time (count forest))
 (println (keys (first data)))
 
@@ -403,8 +421,7 @@
                blah))
 (def response (map :new_tumor_event_after_initial_treatment blah))
 
-(def f "/home/kanderson/Code/Bioinformatics/lung_risk/missing_filled_with_year.csv")
-
+(def f "/home/kc/Code/Bioinformatics/lung_cancer/missing_filled_with_year.csv")
 (def foo (with-open [rdr (clojure.java.io/reader f)]
            (let [l (line-seq rdr)
                  ks (map keyword
@@ -414,9 +431,9 @@
                                  (clojure.string/split row #",")))
                  f2 (fn [row] (zipmap ks (f row)))]
              (mapv f2 (rest l)))))
-(def data (mapv #(dissoc % :new_tumor_event_after_initial_treatment)
+(def data2 (mapv #(dissoc % :new_tumor_event_after_initial_treatment)
                 foo))
-(def response (mapv :new_tumor_event_after_initial_treatment foo))
+(def response2 (mapv :new_tumor_event_after_initial_treatment foo))
 
 (def data
   (into []
@@ -434,7 +451,7 @@
         data))
 
 
-(def f "/home/kanderson/Code/Bioinformatics/lung_risk/bar.csv")
+(def f "/home/kc/Code/Bioinformatics/lung_cancer/data/bar3.csv")
 (def foo (with-open [rdr (clojure.java.io/reader f)]
            (let [l (line-seq rdr)
                  meta (clojure.string/split (first l) #", ")
@@ -446,17 +463,12 @@
 (def data (mapv #(into [] (rest %)) (second foo)))
 (def response (mapv first (second foo)))
 
-(def whoa
-  (build-decision-tree data response (range (count gene_list))
-                       (zipmap (range)
-                               (take 300 (nthrest gene_list 300)))))
-
 
 (def forest (build-forest data
                           response
                           (zipmap (range) gene_list)))
 (time (count forest))
-(show-tree ((nth forest 1) :tree))
+(show-tree ((nth forest 4) :tree))
 
 (show-tree (build-decision-tree [[:a 75]
                                  [:a 70]
@@ -466,3 +478,8 @@
                                  :false
                                  :false
                                  :true]))
+(use 'incanter.core)
+(use 'incanter.charts)
+(calc-auc (roc-curve forest2 (symbol "YES") data2 response2))
+(let [[fp tp] (roc-curve forest2 (symbol "YES") data2 response2)]
+  (view (xy-plot fp tp)))
