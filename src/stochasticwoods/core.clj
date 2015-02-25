@@ -348,7 +348,7 @@
         gi0 (gini-impurity (map second data))
         bootstap_sample_fn (sample-fn data)]
     (take ntrees
-          (map (fn [inds i]
+          (pmap (fn [inds i]
                  (do (if (zero? (mod i 100))
                        (println i))
                      {:inbag-indices (apply hash-set inds)
@@ -618,7 +618,7 @@
         vivar (fn [v] (mean
                       (remove nil?
                               (map #((vifn %) v) woods))))]
-    (map #(do (if (= 0 (mod % 5000))
+    (pmap #(do (if (= 0 (mod % 5000))
                 (println %))
               (vivar %))
          (range (count (first (first data)))))))
@@ -703,11 +703,7 @@
         v)))
 
 
-
-(println (frequencies (map second dd2)))
-(println (frequencies (map second dd)))
-
-(def f "/home/kc/Code/Bioinformatics/lung_cancer/data/tumor_rnaseq_normalized.csv")
+(def f "/home/kc/Code/Bioinformatics/lung_cancer/data/luad_rnaseq_normalized_recurrence.csv")
 (def f "/home/kanderson/Code/Bioinformatics/lung_risk/rnaseq_recurrence.csv")
 (def f "/home/kanderson/Code/Bioinformatics/lung_risk/lusc_recurrence_rnaseq.csv")
 (def f "/home/kanderson/Code/Bioinformatics/lung_risk/luad_metastasis_rnaseq.csv")
@@ -1446,6 +1442,10 @@
 ;;                (conj imps imp)
 ;;                (conj included (into #{} varsnext)))))))
 
+(defn close-or-less-than
+  [a b]
+  (< a (* 1.025 b)))
+
 (defn collect-stepwise-data
   [data]
   (loop [vars (range (count (first (first data))))
@@ -1462,12 +1462,12 @@
                         (filter #(> (second %) 0)
                                 (zipmap (range) imp)))]
       (println (count vars) (count varsnext))
-      (if (= (count vars) (count varsnext))
-        (list forests imps included))
-      (recur varsnext
-             (conj forests rf)
-             (conj imps imp)
-             (conj included (into #{} varsnext))))))
+      (if (close-or-less-than )
+        (list forests imps included)
+        (recur varsnext
+               (conj forests rf)
+               (conj imps imp)
+               (conj included (into #{} varsnext)))))))
 
 (def alldata (collect-stepwise-data dd))
 
