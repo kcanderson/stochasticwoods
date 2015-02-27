@@ -618,7 +618,7 @@
         vivar (fn [v] (mean
                       (remove nil?
                               (map #((vifn %) v) woods))))]
-    (pmap #(do (if (= 0 (mod % 5000))
+    (map #(do (if (= 0 (mod % 5000))
                 (println %))
               (vivar %))
          (range (count (first (first data)))))))
@@ -703,7 +703,8 @@
         v)))
 
 
-(def f "/home/kc/Code/Bioinformatics/lung_cancer/data/luad_rnaseq_normalized_recurrence.csv")
+(def f "/home/kc/Code/Bioinformatics/lung_cancer/data/rnaseq_recurrence.csv")
+(def f "/home/kc/Code/Bioinformatics/lung_cancer/data/lusc_recurrence_rnaseq.csv")
 (def f "/home/kanderson/Code/Bioinformatics/lung_risk/rnaseq_recurrence.csv")
 (def f "/home/kanderson/Code/Bioinformatics/lung_risk/lusc_recurrence_rnaseq.csv")
 (def f "/home/kanderson/Code/Bioinformatics/lung_risk/luad_metastasis_rnaseq.csv")
@@ -1462,7 +1463,7 @@
                         (filter #(> (second %) 0)
                                 (zipmap (range) imp)))]
       (println (count vars) (count varsnext))
-      (if (close-or-less-than )
+      (if (close-or-less-than (count vars) (count varsnext))
         (list forests imps included)
         (recur varsnext
                (conj forests rf)
@@ -1470,17 +1471,27 @@
                (conj included (into #{} varsnext)))))))
 
 (def alldata (collect-stepwise-data dd))
+(def alldata2 (collect-stepwise-data dd))
 
-(def alldata (collect-stepwise-data dd))
+(def allimps (map #(zipmap gene_list %) (second alldata)))
+(def allimps2 (map #(zipmap gene_list %) (second alldata2)))
+
+(def sds1 (map #(sd (map second %)) allimps))
+(def sds2 (map #(sd (map second %)) allimps2))
+(def fallimps2 (filter #(< (sd (map second %)) (* 5 (apply min sds2)))
+                       allimps2))
+
+(count (clojure.set/intersection
+        (into #{} (map first (filter #(> (second %) 0) (last allimps))))
+        (into #{} (map first (filter #(> (second %) 0) (last allimps2))))))
 (spit "lusc_rnaseq_recurrence_12runs.edn" (pr-str alldata))
-
 (def alldata (read-string (slurp "lusc_rnaseq_recurrence_12runs.edn")))
 (def alldata2 (read-string (slurp "lusc_rnaseq_recurrence_12runs2.edn")))
 
 (def alldata2 (collect-stepwise-data dd))
 (spit "lusc_rnaseq_recurrence_12runs2.edn" (pr-str alldata2))
-(def allimps (map #(zipmap gene_list %) (second alldata)))
-(def allimps2 (map #(zipmap gene_list %) (second alldata2)))
+
+
 
 (def allforests2 (first alldata))
 (def allimps2 (map #(zipmap gene_list %) (second alldata)))
@@ -1493,45 +1504,45 @@
 (let [mostimps (map first
                     (sort-by second >
                              (filter #(> (second %) 0)
-                                     (last (butlast (butlast allimps))))))]
-  (let [p (xy-plot (range (count allimps))
-                   (var-rank-over-runs allimps (first mostimps))
+                                     (last (butlast (butlast fallimps))))))]
+  (let [p (xy-plot (range (count fallimps))
+                   (var-rank-over-runs fallimps (first mostimps))
                    :series-label (first mostimps)
                    :legend true
                    :x-label "Runs"                   
                    :y-label "Importance rank"                   
                    :title "Varible rank over 12 stepwise runs (top 40 genes)")]
     (view (reduce #(add-lines %1
-                              (range (count allimps))
-                              (var-rank-over-runs allimps %2)
+                              (range (count fallimps))
+                              (var-rank-over-runs fallimps %2)
                               :series-label %2)
                   p (rest mostimps)))))
 
 (let [mostimps (map first (sort-by second >
                                    (filter #(> (second %) 0)
-                                           (last (butlast (butlast (butlast allimps)))))))]
-  (let [p (xy-plot (range 1 (inc (count allimps)))
+                                           (last (butlast (butlast (butlast fallimps)))))))]
+  (let [p (xy-plot (range 1 (inc (count fallimps)))
                    (map #(/ % 1000)
-                        (var-imp-over-runs allimps (first mostimps)))
+                        (var-imp-over-runs fallimps (first mostimps)))
                    :series-label (first mostimps)
                    :legend true
                    :x-label "Runs"                   
                    :y-label "VIMP"                   
                    :title "Varible importance over 12 stepwise runs (top 80 genes)")]
     (view (reduce #(add-lines %1
-                              (range 1 (inc (count allimps)))
+                              (range 1 (inc (count fallimps)))
                               (map (fn [i] (/ i 1000))
-                                   (var-imp-over-runs allimps %2))
+                                   (var-imp-over-runs fallimps %2))
                               :series-label %2)
                   p (rest mostimps)))))
 
+(def allforests (first alldata2))
 (def recurrence_classification (grab-auc-over-runs dd allforests :YES))
-
 (view (xy-plot (range 1 (inc (count allforests)))
                recurrence_classification
                :x-label "Runs"
                :y-label "Classification performance (AUC)"
-               :title "LUSC recurrence stepwise performance"))
+               :title "LUAD recurrence stepwise performance"))
 
 
 (def impkeys
@@ -1655,14 +1666,14 @@
   (println
    (square
     (incanter.stats/correlation
-     (map (partial mean-vimp allimps) k)
-     (map (partial mean-vimp allimps2) k)))))
+     (map (partial mean-vimp fallimps) k)
+     (map (partial mean-vimp fallimps2) k)))))
 
 (let [k keylist]
   (view
    (scatter-plot
-    (map (partial mean-vimp allimps) k)
-    (map (partial mean-vimp allimps2) k)
+    (map (partial mean-vimp fallimps) k)
+    (map (partial mean-vimp fallimps2) k)
     :x-label "VIMP"
     :y-label "VIMP"
     :title "Mean VIMP score correlation for two runs r2=0.034")))
@@ -1672,8 +1683,8 @@
   (println
    (square
     (incanter.stats/correlation
-     (map (partial area-vimp allimps) k)
-     (map (partial area-vimp allimps2) k)))))
+     (map (partial area-vimp fallimps) k)
+     (map (partial area-vimp fallimps2) k)))))
 
 (let [k (keys (first allimps))]
   (println
@@ -1685,11 +1696,11 @@
 (let [k keylist]
   (view
    (scatter-plot
-    (map (partial area-vimp allimps) k)
-    (map (partial area-vimp allimps2) k)
-    :x-label "VIMP"
-    :y-label "VIMP"
-    :title "Area VIMP score correlation for two runs r2=0.057")))
+    (map #(/ % 1000.0) (map (partial area-vimp fallimps) k))
+    (map #(/ % 1000.0) (map (partial area-vimp fallimps2) k))
+    :x-label "Area VIMP measure (run 1)"
+    :y-label "Area VIMP measure (run 2)"
+    :title "Area VIMP score correlation for two runs (after removal of high-variance runs) r2=0.41")))
 
 ;; Relative rank areas
 (let [k keylist
@@ -1748,12 +1759,23 @@
                               :series-label %2)
                   p (rest k)))))
 
-(doseq [a (sort-by second > (filter #(> (second %) 0) (last (butlast allimps2))))]
-  (println a))
-
-
-
-
-
+((relative-ranks allimps (last (third alldata)))
+ (first (last (third alldata))))
+(first (last (third alldata)))
+(let [m (zipmap (range) gene_list)
+      mostimps (map m (last (third alldata)))
+      f (relative-ranks allimps m)]
+  (let [p (xy-plot (range 1 (inc (count allimps)))
+                   (f (first mostimps))
+                   :series-label (first mostimps)
+                   :legend true
+                   :x-label "Runs"                   
+                   :y-label "VIMP"                   
+                   :title "Varible importance over 12 stepwise runs (top 80 genes)")]
+    (view (reduce #(add-lines %1
+                              (range 1 (inc (count allimps)))
+                              (f %2)
+                              :series-label %2)
+                  p (rest mostimps)))))
 
 
