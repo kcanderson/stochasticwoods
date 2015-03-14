@@ -18,6 +18,11 @@
     (fn [x] (.nth ^clojure.lang.PersistentVector
                  (.first ^clojure.lang.PersistentList x) n))))
 
+(defn grab-indices-from-data
+  [data indices]
+  (let [f (apply juxt (map vector-get-fn indices))]
+    (map f data)))
+
 (defn third
   [l]
   (second (rest l)))
@@ -304,9 +309,9 @@
 (defn var-sample-fn
   ([data]
    (let [nfeatures (count (first (first data)))]
-     (var-sample-fn data (range nfeatures)
+     (var-sample-fn (range nfeatures)
                     (int (java.lang.Math/sqrt nfeatures)))))
-  ([data features mtry]
+  ([features mtry]
    (fn []
      (sample-without-replacement features mtry))))
 
@@ -330,6 +335,12 @@
          (list (list var split_val)
                (decision-tree lte_data vars_sel_fn gil split_fns)
                (decision-tree gt_data vars_sel_fn gig split_fns)))))))
+(defn sample-fn
+  [data]
+  (let [n (count data)
+        r (range n)]
+    (fn []
+      (sample-without-replacement r (int (/ n 2))))))
 
 (defn sample-fn
   [data]
@@ -337,22 +348,23 @@
         r (range n)]
     (fn []
       (sample-with-replacement
-       (range n) n))))
+       r n))))
 
 (defn grow-forest
-  [data & {:keys [ntrees var_sample_fn]
+  [data & {:keys [ntrees var_sample_fn decision_tree_fn]
            :or {ntrees 1000
-                var_sample_fn (var-sample-fn data)}}]
+                var_sample_fn (var-sample-fn data)
+                decision_tree_fn decision-tree}}]
   (let [score0 (gini-impurity (map second data))
         split_fns (build-split-fns data)
         gi0 (gini-impurity (map second data))
         bootstap_sample_fn (sample-fn data)]
     (take ntrees
           (pmap (fn [inds i]
-                 (do (if (zero? (mod i 100))
+                 (do (if (zero? (mod i 500))
                        (println i))
                      {:inbag-indices (apply hash-set inds)
-                      :tree (decision-tree
+                      :tree (decision_tree_fn
                              (grab-data-in-order data inds)
                              var_sample_fn gi0 split_fns)}))
                (repeatedly bootstap_sample_fn) (range)))))
@@ -516,7 +528,7 @@
 (defn classification-roc
   [predictions classifications category]
   (let [thresholds (map #(* 0.05 %) (range 20))
-        f_spec #(/ (get % :true-positive 0)
+        f_spec #(/ (get % :true-positpive 0)
                    (+ (get % :true-positive 0)
                       (get % :false-negative 0)))
         fp_rate #(/ (get % :false-positive 0)
@@ -605,23 +617,76 @@
             origcorrect (countcorrectfn origd)]
         (fn [variable]
           (if (contains? features variable)
-            (- origcorrect
-               (countcorrectfn (permute-var origd variable)))))))))
+            (* 0.5
+               (+ (- origcorrect
+                     (countcorrectfn (permute-var origd variable)))
+                  (- origcorrect
+                     (countcorrectfn (permute-var origd variable)))))))))))
 
 (defn all-variables-importance
-  [forest data]
-  (let [woods (associate-vars-in-forest forest)
-        mean (fn [c] (let [n (float (count c))]
-                      (if (zero? n)
-                        0 (/ (reduce + c) n))))
-        vifn (memoize (variable-importance data))
-        vivar (fn [v] (mean
-                      (remove nil?
-                              (map #((vifn %) v) woods))))]
-    (map #(do (if (= 0 (mod % 5000))
-                (println %))
-              (vivar %))
-         (range (count (first (first data)))))))
+  ([forest data]
+   (all-variables-importance
+    forest data (range (count (first (first data))))))
+  ([forest data variables]
+   (let [nt_inv (/ 1.0 (count forest))
+         woods (associate-vars-in-forest forest)
+         mean (fn [c] (let [n (float (count c))]
+                       (if (zero? n)
+                         0 (/ (reduce + c) n))))
+         vifn (memoize (variable-importance data))
+         vivar (fn [v] (list v (* nt_inv
+                                 (mean
+                                  (remove nil?
+                                          (map #((vifn %) v) woods))))))]
+     (pmap #(do (if (= 0 (mod %2 5000))
+                  (println %2))
+                (vivar %1))
+           variables (range)))))
+;; (defn all-variables-importance
+;;   ([forest data]
+;;    (all-variables-importance
+;;     forest data (range (count (first (first data))))))
+;;   ([forest data variables]
+;;    (let [woods (associate-vars-in-forest forest)
+;;          mean (fn [c] (let [n (float (count c))]
+;;                        (if (zero? n)
+;;                          0 (/ (reduce + c) n))))
+;;          vifn (memoize (variable-importance data))
+;;          vivar (fn [v] (list v (mean
+;;                                (remove nil?
+;;                                        (map #((vifn %) v) woods)))))]
+;;      (pmap #(do (if (= 0 (mod %2 5000))
+;;                   (println %2))
+;;                 (vivar %1))
+;;            variables (range)))))
+;; (defn all-variables-importance
+;;   [forest data]
+;;   (let [woods (associate-vars-in-forest forest)
+;;         mean (fn [c] (let [n (float (count c))]
+;;                       (if (zero? n)
+;;                         0 (/ (reduce + c) n))))
+;;         vifn (memoize (variable-importance data))
+;;         vivar (fn [v] (mean
+;;                       (remove nil?
+;;                               (map #((vifn %) v) woods))))]
+;;     (pmap #(do (if (= 0 (mod % 5000))
+;;                  (println %))
+;;                (vivar %))
+;;           (range (count (first (first data)))))))
+
+;; (defn all-variables-importance
+;;   [forest data]
+;;   (let [woods (associate-vars-in-forest forest)
+;;         mean (fn [c] (let [n (float (count c))]
+;;                       (if (zero? n)
+;;                         0 (/ (reduce + c) n))))
+;;         vifn (memoize (variable-importance data))
+;;         vivar (fn [v] (mean
+;;                       (remove nil?
+;;                               (map #((vifn %) v) woods))))]
+;;     (apply concat
+;;      (pmap #(map vivar %)
+;;            (partition 5000 (range (count (first (first data)))))))))
 
 
 (defn adjacency-list
@@ -681,7 +746,6 @@
                    "dot" "-Tpdf" :in dot :out-enc :bytes))]
     (clojure.java.shell/sh "display" :in pdf)))
 
-
 (defn update-dist
   [ntot d]
   (into []
@@ -696,1086 +760,49 @@
                   nil))))
 
 
-(defn special-read-string
-  [x]
-  (let [v (read-string x)]
-    (if (symbol? v) (keyword v)
-        v)))
+(defn tree-minimum-depth
+  ([tree] (tree-minimum-depth tree 0))
+  ([tree n]
+   (if (leaf? tree) {}
+       (merge-with (partial min-key first)
+                   {(first (first tree)) (list n)}
+                   (tree-minimum-depth (second tree) (inc n))
+                   (tree-minimum-depth (third tree) (inc n))))))
 
+(defn- mymean
+  [coll]
+  (let [n (count coll)]
+    (/ (reduce + coll) n)))
 
-(def f "/home/kc/Code/Bioinformatics/lung_cancer/data/rnaseq_recurrence.csv")
-(def f "/home/kc/Code/Bioinformatics/lung_cancer/data/lusc_recurrence_rnaseq.csv")
-(def f "/home/kanderson/Code/Bioinformatics/lung_risk/rnaseq_recurrence.csv")
-(def f "/home/kanderson/Code/Bioinformatics/lung_risk/lusc_recurrence_rnaseq.csv")
-(def f "/home/kanderson/Code/Bioinformatics/lung_risk/luad_metastasis_rnaseq.csv")
-(def foo (with-open [rdr (clojure.java.io/reader f)]
-           (let [l (line-seq rdr)
-                 meta (mapv keyword (clojure.string/split (first l) #", "))
-                 f (fn [row] (mapv special-read-string
-                                  (clojure.string/split row #", ")))]
-             [meta (doall (mapv f (rest l)))])))
-(def gene_list (into [] (rest (first foo))))
-(def data (map #(into [] (rest %)) (second foo)))
-(def response (map first (second foo)))
-(def response (map #(cond (= % :M1a) :M1
-                          (= % :M1b) :M1
-                          :else %)
-                   response))
-(def foo nil)
-(def dd (map list data response))
-
-
-(def f "/home/kanderson/Code/Bioinformatics/lung_risk/missing_filled_with_year.csv")
-(def f "/home/kanderson/Code/Bioinformatics/lung_risk/lusc_clinical_missing_filled.csv")
-(def foo (with-open [rdr (clojure.java.io/reader f)]
-           (let [l (line-seq rdr)
-                 ks (map keyword
-                         (clojure.string/split (first l)
-                                               #","))
-                 f (fn [row] (map special-read-string
-                                 (clojure.string/split row #",")))
-                 f2 (fn [row] (zipmap ks (f row)))]
-             (mapv f2 (rest l)))))
-(def data2 (mapv #(dissoc % :new_tumor_event_after_initial_treatment)
-                 foo))
-(def response2 (mapv :new_tumor_event_after_initial_treatment foo))
-(def features (keys (first data2)))
-(def data2 (map #(mapv (fn [k] (get % k))
-                       features)
-                data2))
-(def dd2 (map list data2 response2))
-
-(def f "/home/kanderson/Code/Bioinformatics/lung_risk/luad_clinical_metastasis.csv")
-(def f "/home/kanderson/Code/Bioinformatics/lung_risk/lusc_clinical_metastasis.csv")
-(def foo (with-open [rdr (clojure.java.io/reader f)]
-           (let [l (line-seq rdr)
-                 ks (map keyword
-                         (clojure.string/split (first l)
-                                               #","))
-                 f (fn [row] (map special-read-string
-                                 (clojure.string/split row #",")))
-                 f2 (fn [row] (zipmap ks (f row)))]
-             (mapv f2 (rest l)))))
-(def datam (mapv #(dissoc % :pathologic_M)
-                 foo))
-(def responsem (mapv #(cond
-                        (= :M1a (:pathologic_M %)) :M1
-                        (= :M1b (:pathologic_M %)) :M1
-                        :else (:pathologic_M %))
-                     foo))
-(def featuresm (keys (first datam)))
-(def datam (map #(mapv (fn [k] (get % k))
-                       featuresm)
-                datam))
-(def ddm (map list datam responsem))
-(def forestm (grow-forest ddm))
-
-(def f "/home/kanderson/Downloads/glop.csv")
-(def foo (with-open [rdr (clojure.java.io/reader f)]
-           (let [l (line-seq rdr)
-                 meta (mapv keyword (clojure.string/split (first l) #", "))
-                 f (fn [row] (mapv special-read-string
-                                  (clojure.string/split row #", ")))]
-             [meta (doall (mapv f (rest l)))])))
-
-(def gene_list (into [] (rest (first foo))))
-(def data (map #(into [] (rest %)) (second foo)))
-(def response (map first (second foo)))
-(def foo nil)
-(def dd (map list data response))
-
-
-(use 'incanter.core)
-(use 'incanter.charts)
-(use 'incanter.stats)
-(view (histogram (map second blah)))
-(def x [1 2 5 10 20 30 50 100 200 500 700 900])
-(def y (map #(classification-auc
-              (oob-predictions (take % woods) dd)
-              (map second dd) :YES)
-            x))
-(def x2 [1 2 5 10 20 50 100 200 500 1000 1500 2000])
-(def y2 (map #(classification-auc
-               (oob-predictions (take % forest) dd)
-               (map second dd) :YES)
-             x))
-(use 'incanter.pdf)
-
-(view
- (add-lines (xy-plot x y :x-label "Forest Size (num trees)"
-                     :y-label "AUC for OOB Recurrence Prediction"
-                     :legend true
-                     :series-label "mtry = sqrt(p)")
-            x2 y2
-            :series-label "mtry = p/50"))
-
-(view (histogram
-       (let [r (into [] (range 20000))]
-         (repeatedly 20000
-                     #(count
-                       (clojure.set/intersection
-                        (into #{} (take 500 (shuffle r)))
-                        (into #{} (take 500 (shuffle r)))))))))
-
-(def imp_vars1 (read-string (slurp "rna_important_vars.edn")))
-(def imp_vars2 (read-string (slurp "rna_important_vars2.edn")))
-(def imp_vars3 (read-string (slurp "rna_important_vars3.edn")))
-(def imp_vars4 (read-string (slurp "rna_important_vars4.edn")))
-(def imp_vars5 (read-string (slurp "rna_important_vars5.edn")))
-(def imp_vars6 (read-string (slurp "rna_important_vars6.edn")))
-(def imp_vars7 (read-string (slurp "rna_important_vars7.edn")))
-(def imp_vars8 (read-string (slurp "rna_important_vars8.edn")))
-(def imp_vars9 (read-string (slurp "rna_important_vars9.edn")))
-(def imp_vars10 (read-string (slurp "rna_important_vars10.edn")))
-
-(def woods (grow-forest dd :ntrees 700))
-(def imp_vars12 (all-variables-importance woods dd))
-
-
-(spit "rna_important_vars12.edn" (pr-str imp_vars12))
-
-(def v1 (map (comp #(/ % 5) +)
-             imp_vars1 imp_vars3 imp_vars5 imp_vars7 imp_vars9 imp_vars11))
-(def v2 (map (comp #(/ % 5) +)
-             imp_vars2 imp_vars4 imp_vars6 imp_vars8 imp_vars10 imp_vars12))
-
-(view (scatter-plot imp_vars1 imp_vars2))
-(view (histogram (map + v1 v2)
-                 :nbins 50))
-
-(defn sig-gene?
-  [[x y]]
-  (and (> x 0.004) (> y 0.004)))
-(defn stringify-gene-keyword
-  [k]
-  (first (clojure.string/split
-          (subs (str k) 1) #"\|")))
-
-(def best_genes
-  (map #(stringify-gene-keyword (nth gene_list (last %))) (filter sig-gene? (map list v1 v2 (range)))))
-(def best_genes_inds
-  (map last (filter sig-gene? (map list v1 v2 (range)))))
-
-(doseq [i best_genes]
-  (println i))
-(let [chart (scatter-plot v1 v2
-                          :x-label "Variable Importance from 6 runs"
-                          :y-label "Variable Importance from 6 runs")]
-  (view
-   (reduce (fn [c [x y i]]
-             (if (sig-gene? [x y])
-               (add-pointer c x y :text (stringify-gene-keyword
-                                         (nth gene_list i)))
-               c))
-           chart (map list v1 v2 (range)))))
-
-(let [vals (classification-roc
-            (oob-predictions redwoods dd)
-            (map second dd) :YES)
-      vals2 (classification-roc
-             (oob-predictions woods dd)
-             (map second dd) :YES)]
-  (view (add-lines
-         (add-lines
-          (xy-plot (map first vals2) (map second vals2)
-                   :x-label "Specificity"
-                   :y-label "Sensitivity"
-                   :series-label "Original forest"
-                   :legend true)
-          (map first vals) (map second vals)
-          :series-label "Variable selection then forest")
-         [0 1] [0 1] :series-label "Random chance")))
-
-
-
-
-
-(defn special-sample-fn
-  [data var_importance mtry]
-  (let [split 0.0025
-        n (count var_importance)
-        m (count data)
-        g1 (map first (filter #(> (second %) split) var_importance))
-        n1 (max 1 (int (* mtry (/ (count g1) n))))
-        g2 (map first (filter #(<= (second %) split) var_importance))
-        n2 (- mtry n1)]
-    (fn []
-      (list (sample-with-replacement
-             (range m) m)
-            (concat (sample-without-replacement g1 n1)
-                    (sample-without-replacement g2 n2))))))
-
-
-(def redwoods
-  (grow-forest
-   dd :samplefn (sample-fn dd best_genes_inds) :ntrees 1000))
-
-(def foo (all-variables-importance redwoods dd))
-(map #(nth gene_list (second %))
-     (sort-by first > (filter #(> (first %) 0) (map list foo (range)))))
-(classification-auc
- (oob-predictions woods dd2)
- (map second dd2) :YES)
-
-
-
-(defn scale-map
-  [m scale]
+(defn minimum-depth
+  [forest]
   (apply merge
-         (map (fn [[k i]] {k (* scale i)})
-              m)))
-(defn halve
-  [n]
-  (/ n 2))
-
-(defn count-votes
-  [tree]
-  (if (leaf? tree) (apply + (map second tree))
-      (+ (count-votes (second tree))
-         (count-votes (third tree)))))
-
-(defn expand-tree
-  [tree var]
-  (cond
-    (leaf? tree) (list tree)
-    (= (first (first tree)) var) (concat
-                                  (expand-tree (second tree) var)
-                                  (expand-tree (third tree) var))
-    :else (for [l (expand-tree (second tree) var)
-                r (expand-tree (third tree) var)]
-            (list (first tree) l r))))
-
-
-(defn tree-var-importance
-  [data]
-  (let [rfn (resolve-in-tree (split-fn-generator data))
-        allinds (into #{} (range (count data)))]
-    (fn [tree]
-      (let [t (tree :tree)
-            inbag (tree :inbag-indices)
-            oob (clojure.set/difference allinds inbag)
-            d (grab-data-in-order data oob)
-            preds (fn [t] (map #(rfn t %) d))
-            orig (preds t)
-            features (tree :features)]
-        (reduce merge
-                (map
-                 (fn [var]
-                   (let [e (expand-tree t var)
-                         n (count e)
-                         votes (reduce #(map (partial merge-with +) %1 %2)
-                                       (mapv preds e))]
-                     (println (last e))
-                     {var (reduce +
-                                  (map #(- (to-probability %1 :YES)
-                                           (to-probability %2 :YES))
-                                       orig votes))}))
-                 (take 1 (nthrest features 3))))))))
-
-(defn tree-var-importance
-  [data]
-  (let [rfn (resolve-in-tree (split-fn-generator data))
-        allinds (into #{} (range (count data)))]
-    (fn [tree]
-      (let [t (tree :tree)
-            inbag (tree :inbag-indices)
-            oob (clojure.set/difference allinds inbag)
-            d (grab-data-in-order data oob)
-            preds (fn [t] (map #(rfn t %) d))
-            orig (map #(to-probability % :YES) (preds t))
-            features (tree :features)]
-        (fn [var]
-          (let [e (expand-tree t var)
-                n (count e)
-                votes (reduce #(doall
-                                (map (partial merge-with +) %1 %2))
-                              (map preds e))]
-            ;;(println votes)
-            {var (reduce +
-                         (map #(- (to-probability %2 :YES)
-                                  %1)
-                              orig votes))}
-            ))))))
-
-
-(def tree '((:b 1) {:YES 1} ((:a 1) ((:a 1) {:YES 1} {:NO 2}) {:NO 4})))
-
-
-
-(defn split-vote
-  [split_fn_generator var]
-  (letfn [(sv [tree x]
-            (loop [t tree]
-              (if (leaf? t) t
-                  (if (= var (first (first t)))
-                    (merge-with (fn [a b] (* 0.5 (+ a b)))
-                                (sv (second t) x)
-                                (sv (third t) x))
-                    (if ((split_fn_generator (first t)) x)
-                      (recur (second t))
-                      (recur (third t)))))))]
-    sv))
-
-(defn to-probability
-  [m k]
-  (/ (get m k 0)
-     (apply + (map second m))))
-(defn to-classification
-  [m]
-  (first (apply max-key second m)))
-
-(defn var-importance
-  [data forest]
-  (let [orig (map #(to-probability % :YES)
-                  (oob-predictions forest data))
-        fn_gen (split-fn-generator data)]
-    (fn [var]
-      (reduce +
-              (map #(- %1 (to-probability %2 :YES))
-                   orig
-                   (oob-predictions 
-                    (split-vote fn_gen var)
-                    forest data))))))
-
-(defn var-importance
-  [data forest]
-  (let [orgcls (map second data)
-        countfn #(count (filter true? (map = orgcls %)))
-        orig (map to-classification
-                  (oob-predictions forest data))
-        origcorrect (countfn orig)
-        fn_gen (split-fn-generator data)]
-    (fn [var]
-      (- origcorrect
-         (countfn (oob-classifications
-                   (split-vote fn_gen var)
-                   forest data))))))
-
-((var-importance dd2 forest) 1)
-(defn all-vars-importance
-  [data forest]
-  (let [f (var-importance data forest)]
-    (map f (range (count (first (first data)))))))
-
-(def forest (grow-forest dd2))
-((var-importance dd2 forest) 0)
-
-
-(def foo (all-vars-importance dd2 forest))
-(count foo)
-
-((split-vote (split-fn-generator dd2) 28)
- ((first forest) :tree) (first dd2))
-
-
-(defn majority-vote
-  [votes]
-  (first (apply max-key second votes)))
-
-(defn merge-add!
-  [tm1 m2]
-  (reduce (fn [t [k i]]
-            (assoc! t k (+ i (get t k 0))))
-          tm1 m2))
-
-(defn maps-reducer
-  [maps]
-  (map persistent!
-       (reduce
-        (fn [tm m] (map merge-add! tm m))
-        (map transient (first maps))
-        (rest maps))))
-
-(defn glop
-  [var rfn d forest vars origvotes totorigvotes]
-  (reduce (fn [votes update_votes]
-            ;;(map #(apply merge-with + %1 %2) votes update_votes)
-            votes)
-          totorigvotes
-          (map (fn [tree tree_vars ov]
-                 (if (contains? tree_vars var)
-                   (let [newvotes ((oob-votes-tree rfn d) tree)]
-                     (map #(if (not= %1 %2)
-                             (merge-with - %1 %2))
-                          newvotes ov))))
-               forest vars origvotes)))
-(time (variable-importance dd forest))
-
-(defn variable-importance
-  [data forest]
-  (let [ntrees (count forest)
-        nfeatures (count (first (first data)))
-        rfn (resolve-in-tree (split-fn-generator data))
-        vars (vars-used-in-forest forest)
-        origcls (oob-classifications rfn forest data)
-        cls (map second data)
-        countcorrectfn (fn [cs]
-                         (count (filter true?
-                                        (map #(= %1 %2) cs cls))))
-        origcount (countcorrectfn origcls)
-        origvotes (map #(oob-votes rfn (list %) data) forest)
-        totorigvotes (reduce #(map (fn [m1 m2] (merge-with + m1 m2))
-                                   %1 %2)
-                             origvotes)
-        f (fn [d var tree vars_in_tree ov]
-            (if (contains? vars_in_tree var)
-              (oob-votes rfn (list tree) d)
-              ov))
-        f2 (fn [d var] (map (partial f d var) forest vars origvotes))
-        f3 (fn [var]
-             (- origcount
-                (countcorrectfn
-                 (map majority-vote
-                      (maps-reducer
-                       (f2 (permute-var data var) var))))))]
-    (glop 1000 rfn data forest vars origvotes totorigvotes)))
-
-
-;; (defn variable-importance
-;;   [data forest]
-;;   (let [ntrees (count forest)
-;;         nfeatures (count (first (first data)))
-;;         rfn (resolve-in-tree (split-fn-generator data))
-;;         vars (vars-used-in-forest forest)
-;;         origcls (oob-classifications rfn forest data)
-;;         cls (map second data)
-;;         countcorrectfn (fn [cs]
-;;                          (count (filter true?
-;;                                         (map #(= %1 %2) cs cls))))
-;;         origcount (countcorrectfn origcls)
-;;         origvotes (map #(oob-votes rfn (list %) data) forest)
-;;         f (fn [d var tree vars_in_tree ov]
-;;             (if (contains? vars_in_tree var)
-;;               (oob-votes rfn (list tree) d)
-;;               ov))
-;;         f2 (fn [d var] (map (partial f d var) forest vars origvotes))
-;;         f3 (fn [var]
-;;              (- origcount
-;;                 (countcorrectfn
-;;                  (map majority-vote
-;;                       (maps-reducer
-;;                        (f2 (permute-var data var) var))))))]
-;;     (map #(do (if (= (mod % 100) 0) (println %)) (f3 %))
-;;          (range 20)
-;;          ;;(range nfeatures)
-;;          )))
-
-
-(def forest (grow-forest dd :ntrees 2000))
-(def imps (variable-importance dd forest))
-(first forest)
-(def blah (map + (first imps) (second imps)))
-(count (second imps))
-(def woods (grow-forest dd2 :ntrees 500))
-(def imps2 (variable-importance dd2 woods))
-(time (count imps2))
-(take 20 (sort-by second > (zipmap gene_list imps)))
-(println (filter #(> (second %) 0) (zipmap gene_list imps)))
-(defn all-variables-importance
-  [forest data]
-  (let [mean (fn [c] (let [n (count c)]
-                      (if (zero? n)
-                        0 (/ (reduce + c) n))))
-        vifn (variable-importance data)
-        vivar (fn [v] (mean
-                      (remove nil?
-                              (map #(vifn % v) forest))))]
-    (map #(do (if (= 0 (mod % 100))
-                (println %))
-              (vivar %))
-         (range (count (first (first data)))))))
-
-(defn vars-in-tree
-  [tree]
-  (if (leaf? tree)
-    #{}
-    (let [[[var split] left right] tree
-          sub (concat (vars-in-tree left)
-                      (vars-in-tree right))]
-      (cons var sub))))
-(defn unique-vars-in-tree
-  [tree]
-  (into #{} (vars-in-tree tree)))
-
-(defn shrinking-sample-fn
-  [data]
-  (let [n (count data)]
-    (fn [features]
-      (let [m (count features)
-            mtry (min m (max 1
-                             (java.lang.Math/sqrt m)
-                             (/ m 20)
-                             ))]
-        (list (sample-with-replacement
-               (range n) n)
-              (sample-without-replacement
-               features mtry))))))
-
-(defn increment-map
-  [m table]
-  (persistent!
-   (reduce #(assoc! %1 %2 (inc (get %1 %2 0)))
-           (transient m) (into () table))))
-
-(defn remove-entries!
-  [m entries]
-  (persistent!
-   (reduce #(dissoc! %1 %2)
-           (transient m) entries)))
-
-(defn grow-forest-shrink-features
-  [data & {:keys [ntrees features]
-           :or {ntrees 1000
-                features (range (count (first (first data))))}}]
-  (let [score0 (gini-impurity (map second data))
-        split_fns (build-split-fns data)
-        gi0 (gini-impurity (map second data))
-        samplefn (shrinking-sample-fn data)]
-    (loop [n 0
-           forest (list)
-           fs (into #{} features)
-           missing_map {}]
-      (if (= n ntrees)
-        (list forest fs)
-        (let [[inds finds] (samplefn fs)
-              sfinds (into #{} finds)
-              tree (decision-tree
-                    (grab-data-in-order data inds)
-                    sfinds gi0 split_fns)
-              missing (clojure.set/difference
-                       sfinds (unique-vars-in-tree tree))
-              m (increment-map missing_map missing)
-              r (into #{} (map first (filter #(> (second %) 3) m)))]
-          (println n (count fs) (count m)
-                   (apply max-key second m))
-          (recur (inc n)
-                 (cons {:inbag-indices (apply hash-set inds)
-                        :features sfinds
-                        :tree tree}
-                       forest)
-                 (clojure.set/difference fs r)
-                 m))))))
-
-
-
-
-(def imp_vars (all-variables-importance forestm ddm))
-(spit "luad_rnaseq_metastasis.edn" (pr-str imp_vars))
-(doseq [a (take 30 (sort-by second > (zipmap gene_list imp_vars)))]
-  (println (first a) (second a)))
-
-(println (frequencies (map second ddm)))
-
-
-(def forest (grow-forest dd))
-(def imp_vars (all-variables-importance forest dd))
-(count imp_vars)
-(classification-auc
- (oob-predictions forest dd)
- (map second dd) :YES)
-
-(defn tree-gini-decrease
-  [data]
-  (let [all (into #{} (range (count (first (first data)))))]
-    (fn [{tree :tree inbag :inbag-indices}]
-      (let [oob (clojure.set/difference all inbag)]
-        ))))
-
-(defn tree-gini-decrease
-  ([data {tree :tree inbag :inbag-indices}]
-   (let [all (into #{} (range (count (first (first data)))))
-         oob (clojure.set/difference all inbag)]
-     (tree-gini-decrease
-      data tree (gini-impurity (map second (grab-data-in-order data oob))))))
-  ([data {tree :tree inbag :inbag-indices} gi]
-   (let [all (into #{} (range (count (first (first data)))))])))
-
-
-(def forest (grow-forest dd :ntrees 1000))
-(def imps (all-variables-importance forest dd))
-
-(def forest12 (grow-forest dd :ntrees 1000
-                           :var_sample_fn
-                           (var-sample-fn dd finds
-                                          (int (java.lang.Math/sqrt(count finds))))))
-
-(def imps12 (all-variables-importance forest12 dd))
-(def finds (take 10 (map first
-                         (sort-by second > (zipmap (range) imps11)))))
-(println (take 20 (sort-by second > (zipmap gene_list imps10))))
-
-(let [z (filter #(> (second %) 0) (last (butlast allimps)))
-      z2 (sort-by second > z)]
-  (doseq [i (take 20 z2)]
-    (println (first i) (/ (second i) 1000))))
-(def allimps (map #(zipmap gene_list %) (list imps imps2 imps3 imps4 imps5 imps6 imps7 imps8 imps9 imps10 imps11 imps12)))
-(def allforests (list forest forest2 forest3 forest4 forest5 forest6 forest7 forest8 forest9 forest10 forest11 forest12))
-(spit "luad_rnaseq_metastasis_impvars_12runs.edn" (pr-str allimps))
-(spit "luad_rnaseq_metastasis_forests_12runs.edn" (pr-str allforests))
-(def allimps (read-string (slurp "luad_rnaseq_metastasis_impvars_12runs.edn")))
-(def allforests (read-string (slurp "luad_rnaseq_metastasis_forests_12runs.edn")))
-
-
-
-(defn var-imp-over-runs
-  ([all_imps var]
-   (map var all_imps)))
-
-(defn var-rank-over-runs
-  ([all_imps var]
-   (let [imps (var-imp-over-runs all_imps var)]
-     (map #(let [foo (zipmap (map first (sort-by second %1)) (range))]
-             (if (zero? %2) 0
-                 (foo var)))
-          all_imps imps))))
-
-(defn grab-top-n-over-runs
-  [n all_imps]
-  (mapcat #(map first (take n (sort-by second > %))) all_imps))
-
-(defn grab-auc-over-runs
-  [data all_forests category]
-  (map #(classification-auc
-         (oob-predictions % data)
-         (map second data) category)
-   all_forests))
-
-(def m0classification (grab-auc-over-runs dd allforests :M0))
-(def m1classification (grab-auc-over-runs dd allforests :M1))
-(def mxclassification (grab-auc-over-runs dd allforests :MX))
-
-(use 'incanter.pdf)
-(view
- (add-lines
-  (add-lines (xy-plot (range 1 (inc (count allforests)))
-                      m0classification
-                      :series-label "M0"
-                      :x-label "Runs"
-                      :y-label "Classification performance (AUC)"
-                      :legend true)
-             (range 1 (inc (count allforests)))
-             m1classification
-             :series-label "M1")
-  (range 1 (inc (count allforests)))
-  mxclassification
-  :series-label "MX"))
-
-;; Var imp
-(let [mostimps (map first (sort-by second >
-                                   (filter #(> (second %) 0)
-                                           (last (butlast (butlast (butlast allimps)))))))]
-  (let [p (xy-plot (range 1 (inc (count allimps)))
-                   (map #(/ % 1000)
-                        (var-imp-over-runs allimps (first mostimps)))
-                   :series-label (first mostimps)
-                   :legend true
-                   :x-label "Runs"                   
-                   :y-label "VIMP"                   
-                   :title "Varible importance over 12 stepwise runs (top 78 genes)")]
-    (view (reduce #(add-lines %1
-                              (range 1 (inc (count allimps)))
-                              (map (fn [i] (/ i 1000))
-                                   (var-imp-over-runs allimps %2))
-                              :series-label %2)
-                  p (rest mostimps)))))
-
-;; Ranks
-(let [mostimps (map first
-                    (sort-by second >
-                             (filter #(> (second %) 0)
-                                     (last (butlast (butlast allimps))))))
-      ]
-  (let [p (xy-plot (range (count allimps))
-                   (var-rank-over-runs allimps (first mostimps))
-                   :series-label (first mostimps)
-                   :legend true
-                   :x-label "Runs"                   
-                   :y-label "Importance rank"                   
-                   :title "Varible rank over 12 stepwise runs (top 38 genes)")]
-    (view (reduce #(add-lines %1
-                              (range (count allimps))
-                              (var-rank-over-runs allimps %2)
-                              :series-label %2)
-                  p (rest mostimps)))))
-
-
-(def areas
-  (let [genemap (zipmap (range) gene_list)]
-    (map #(area-under-curve
-           (map list (range)
-                (var-imp-over-runs allimps (genemap %))))
-     (range (count genemap)))))
-
-(view (histogram areas))
-(view (xy-plot (range (count gene_list))
-               (map second
-                    (sort-by second > (zipmap gene_list areas)))))
-
-(def area_forest
-  (let [a (filter #(> (second %) 7.5)
-                  (zipmap (range) areas))
-        features (map first a)]
-    (grow-forest dd :var_sample_fn (var-sample-fn dd features
-                                                  (java.lang.Math/sqrt
-                                                   (count features))))))
-
-;; (defn collect-stepwise-data
-;;   [data]
-;;   (loop [vars (range (count (first (first data))))
-;;          forests []
-;;          imps []
-;;          included [(into #{} vars)]]
-;;     (if (< (count vars) 10)
-;;       (list forests imps included)
-;;       (let [n (count vars)
-;;             rf (grow-forest
-;;                 data
-;;                 :var_sample_fn (var-sample-fn
-;;                                 data vars (int (java.lang.Math/sqrt n))))
-;;             imp (all-variables-importance rf data)
-;;             nnext (int (/ n 2))
-;;             varsnext (take nnext
-;;                            (map first
-;;                                 (sort-by
-;;                                  second > (zipmap (range) imp))))]
-;;         (recur varsnext
-;;                (conj forests rf)
-;;                (conj imps imp)
-;;                (conj included (into #{} varsnext)))))))
-
-(defn close-or-less-than
-  [a b]
-  (< a (* 1.025 b)))
-
-(defn collect-stepwise-data
-  [data]
-  (loop [vars (range (count (first (first data))))
-         forests []
-         imps []
-         included [(into #{} vars)]]
-    (let [n (count vars)
-          rf (grow-forest
-              data
-              :var_sample_fn (var-sample-fn
-                              data vars (int (java.lang.Math/sqrt n))))
-          imp (all-variables-importance rf data)
-          varsnext (map first
-                        (filter #(> (second %) 0)
-                                (zipmap (range) imp)))]
-      (println (count vars) (count varsnext))
-      (if (close-or-less-than (count vars) (count varsnext))
-        (list forests imps included)
-        (recur varsnext
-               (conj forests rf)
-               (conj imps imp)
-               (conj included (into #{} varsnext)))))))
-
-(def alldata (collect-stepwise-data dd))
-(def alldata2 (collect-stepwise-data dd))
-
-(def allimps (map #(zipmap gene_list %) (second alldata)))
-(def allimps2 (map #(zipmap gene_list %) (second alldata2)))
-
-(def sds1 (map #(sd (map second %)) allimps))
-(def sds2 (map #(sd (map second %)) allimps2))
-(def fallimps2 (filter #(< (sd (map second %)) (* 5 (apply min sds2)))
-                       allimps2))
-
-(count (clojure.set/intersection
-        (into #{} (map first (filter #(> (second %) 0) (last allimps))))
-        (into #{} (map first (filter #(> (second %) 0) (last allimps2))))))
-(spit "lusc_rnaseq_recurrence_12runs.edn" (pr-str alldata))
-(def alldata (read-string (slurp "lusc_rnaseq_recurrence_12runs.edn")))
-(def alldata2 (read-string (slurp "lusc_rnaseq_recurrence_12runs2.edn")))
-
-(def alldata2 (collect-stepwise-data dd))
-(spit "lusc_rnaseq_recurrence_12runs2.edn" (pr-str alldata2))
-
-
-
-(def allforests2 (first alldata))
-(def allimps2 (map #(zipmap gene_list %) (second alldata)))
-
-(def allforests (first alldata))
-(def allimps (map #(zipmap gene_list %) (second alldata)))
-(spit "lusc_rnaseq_recurrence_impvars_12runs.edn" (pr-str allimps))
-(spit "lusc_rnaseq_recurrence_forests_12runs.edn" (pr-str allforests))
-
-(let [mostimps (map first
-                    (sort-by second >
-                             (filter #(> (second %) 0)
-                                     (last (butlast (butlast fallimps))))))]
-  (let [p (xy-plot (range (count fallimps))
-                   (var-rank-over-runs fallimps (first mostimps))
-                   :series-label (first mostimps)
-                   :legend true
-                   :x-label "Runs"                   
-                   :y-label "Importance rank"                   
-                   :title "Varible rank over 12 stepwise runs (top 40 genes)")]
-    (view (reduce #(add-lines %1
-                              (range (count fallimps))
-                              (var-rank-over-runs fallimps %2)
-                              :series-label %2)
-                  p (rest mostimps)))))
-
-(let [mostimps (map first (sort-by second >
-                                   (filter #(> (second %) 0)
-                                           (last (butlast (butlast (butlast fallimps)))))))]
-  (let [p (xy-plot (range 1 (inc (count fallimps)))
-                   (map #(/ % 1000)
-                        (var-imp-over-runs fallimps (first mostimps)))
-                   :series-label (first mostimps)
-                   :legend true
-                   :x-label "Runs"                   
-                   :y-label "VIMP"                   
-                   :title "Varible importance over 12 stepwise runs (top 80 genes)")]
-    (view (reduce #(add-lines %1
-                              (range 1 (inc (count fallimps)))
-                              (map (fn [i] (/ i 1000))
-                                   (var-imp-over-runs fallimps %2))
-                              :series-label %2)
-                  p (rest mostimps)))))
-
-(def allforests (first alldata2))
-(def recurrence_classification (grab-auc-over-runs dd allforests :YES))
-(view (xy-plot (range 1 (inc (count allforests)))
-               recurrence_classification
-               :x-label "Runs"
-               :y-label "Classification performance (AUC)"
-               :title "LUAD recurrence stepwise performance"))
-
-
-(def impkeys
-  (map first
-       (filter #(> (second %) 0)
-               (last (butlast (butlast allimps))))))
-
-(defn get-best-vimp
-  [all_imps var]
-  (loop [[imps & rimps] all_imps
-         best 0]
-    (cond
-      (nil? imps) best
-      (zero? (get imps var 0)) (recur rimps best)
-      :else (recur rimps (get imps var best)))))
-
-(defn mean-vimp
-  [all_imps var]
-  (mean (map #(get % var) all_imps)))
-
-(defn area-vimp
-  [all_imps var]
-  (area-under-curve
-   (map #(list %1 (get %2 var)) (range) all_imps)))
-
-(defn relative-ranks
-  [all_imps vars_used]
-  (let [update (fn [imps vars]
-                 (let [z (zipmap (range) gene_list)
-                       foo (apply merge
-                                  (map #(hash-map (z %) (get imps (z %)))
-                                       vars))
-                       n (count foo)]
-                   (reduce (fn [m [[k v] i]]
-                             (assoc m k (float (/ i n))))
-                           foo
-                           (map list
-                                (sort-by second > foo)
-                                (range)))))
-        ranks (map update all_imps vars_used)]
-    (fn [var]
-      (map #(get % var 0) ranks))))
-
-(defn absolute-ranks
-  [all_imps vars_used]
-  (let [update (fn [imps vars]
-                 (let [z (zipmap (range) gene_list)
-                       foo (apply merge
-                                  (map #(hash-map (z %) (get imps (z %)))
-                                       vars))
-                       n (count foo)
-                       ;;n2 (- (count imps) n)
-                       ]
-                   (reduce (fn [m [[k v] i]]
-                             (assoc m k i))
-                           foo
-                           (map list
-                                (sort-by second > foo)
-                                (range)))))
-        ranks (map update all_imps vars_used)]
-    (fn [var]
-      (map #(get % var 0) ranks))))
-
-(defn relative-rank-area-vimp
-  [all_imps vars_used]
-  (let [f (relative-ranks all_imps vars_used)]
-    (fn [var]
-      (area-under-curve
-       (map #(list %1 %2) (range) (f var))))))
-
-(defn rank-area-vimp
-  [all_imps vars_used rank_fn]
-  (let [f (rank_fn all_imps vars_used)]
-    (fn [var]
-      (area-under-curve
-       (map #(list %1 %2) (range) (f var))))))
-
-(def keylist
-  (map first
-       (take 20
-             (sort-by second >
-                      (map #(list % (area-vimp allimps %))
-                           (keys (first allimps)))))))
-(def keylist (keys (first allimps)))
-
-;; Normal RF correlation
-(let [k keylist]
-  (view
-   (scatter-plot
-    (map #(/ (get (first allimps) % 0) 1000.0) k)
-    (map #(/ (get (first allimps2) % 0) 1000.0) k)
-    :x-label "VIMP"
-    :y-label "VIMP"
-    :title "VIMP correlation for two runs r2=0.0001")))
-
-(let [k keylist]
-  (square
-   (correlation
-    (map #(/ (get (first allimps) % 0) 1000.0) k)
-    (map #(/ (get (first allimps2) % 0) 1000.0) k))))
-
-
-;; "Best" VIMP correlation
-(let [k keylist]
-  (view
-   (scatter-plot
-    (map #(get-best-vimp allimps %) k)
-    (map #(get-best-vimp allimps2 %) k))))
-
-(let [k keylist]
-  (view
-   (scatter-plot
-    (map #(get-best-vimp allimps %) k)
-    (map #(get-best-vimp allimps2 %) k)
-    :x-label "VIMP"
-    :y-label "VIMP"
-    :title "Last VIMP score correlation for two runs r2=0.002")))
-
-;; Mean VIMP score
-(let [k keylist]
-  (println
-   (square
-    (incanter.stats/correlation
-     (map (partial mean-vimp fallimps) k)
-     (map (partial mean-vimp fallimps2) k)))))
-
-(let [k keylist]
-  (view
-   (scatter-plot
-    (map (partial mean-vimp fallimps) k)
-    (map (partial mean-vimp fallimps2) k)
-    :x-label "VIMP"
-    :y-label "VIMP"
-    :title "Mean VIMP score correlation for two runs r2=0.034")))
-
-;; Area VIMP score
-(let [k (keys (first allimps))]
-  (println
-   (square
-    (incanter.stats/correlation
-     (map (partial area-vimp fallimps) k)
-     (map (partial area-vimp fallimps2) k)))))
-
-(let [k (keys (first allimps))]
-  (println
-   (view
-    (histogram
-     (map (partial area-vimp allimps2) k)
-     :nbins 50))))
-
-(let [k keylist]
-  (view
-   (scatter-plot
-    (map #(/ % 1000.0) (map (partial area-vimp fallimps) k))
-    (map #(/ % 1000.0) (map (partial area-vimp fallimps2) k))
-    :x-label "Area VIMP measure (run 1)"
-    :y-label "Area VIMP measure (run 2)"
-    :title "Area VIMP score correlation for two runs (after removal of high-variance runs) r2=0.41")))
-
-;; Relative rank areas
-(let [k keylist
-      f3 (rank-area-vimp allimps (third alldata) relative-ranks)
-      f4 (rank-area-vimp allimps2 (third alldata2) relative-ranks)]
-  (view
-   (scatter-plot
-    (map f3 k)
-    (map f4 k)
-    :x-label "VIMP"
-    :y-label "VIMP"
-    :title "Area VIMP score correlation for two runs r2=0.042")))
-
-;; Absolute ranks
-(let [k keylist
-      f3 (rank-area-vimp allimps (third alldata) absolute-ranks)
-      f4 (rank-area-vimp allimps2 (third alldata2) absolute-ranks)]
-  (view
-   (scatter-plot
-    (map f3 k)
-    (map f4 k)
-    :x-label "VIMP"
-    :y-label "VIMP"
-    :title "Area VIMP score correlation for two runs r2=0.37")))
-
-(let [k keylist
-      f3 (rank-area-vimp allimps (third alldata) absolute-ranks)      
-      f4 (rank-area-vimp allimps2 (third alldata2) absolute-ranks)]
-  (square (correlation
-           (map f3 k)    
-           (map f4 k))))
-
-(let [k keylist
-      f3 (rank-area-vimp allimps (third alldata) absolute-ranks)      
-      f4 (rank-area-vimp allimps2 (third alldata2) absolute-ranks)]
-  (view (histogram
-         (map f4 k)
-         ;;(map #(* 0.5 (+ %1 %2)) (map f3 k) (map f4 k))
-           ;;(map f4 k)
-           )))
-
-(let [k (map (zipmap (range) gene_list) (last (butlast (third alldata))))
-      f3 (absolute-ranks allimps3 (third alldata))
-      ;;f4 (absolute-ranks allimps4 (third alldata2))
-      ]
-  (let [p (xy-plot (range (count allimps3))
-                   (f3 (first k))
-                   :series-label (first k)
-                   :legend true
-                   :x-label "Runs"                   
-                   :y-label "Importance rank"                   
-                   :title "Varible rank over 12 stepwise runs (top 38 genes)")]
-    (view (reduce #(add-lines %1
-                              (range (count allimps))
-                              (f3 %2)
-                              :series-label %2)
-                  p (rest k)))))
-
-((relative-ranks allimps (last (third alldata)))
- (first (last (third alldata))))
-(first (last (third alldata)))
-(let [m (zipmap (range) gene_list)
-      mostimps (map m (last (third alldata)))
-      f (relative-ranks allimps m)]
-  (let [p (xy-plot (range 1 (inc (count allimps)))
-                   (f (first mostimps))
-                   :series-label (first mostimps)
-                   :legend true
-                   :x-label "Runs"                   
-                   :y-label "VIMP"                   
-                   :title "Varible importance over 12 stepwise runs (top 80 genes)")]
-    (view (reduce #(add-lines %1
-                              (range 1 (inc (count allimps)))
-                              (f %2)
-                              :series-label %2)
-                  p (rest mostimps)))))
-
-
+         (map (fn [[k v]]
+                {k (mymean v)})
+              (apply merge-with concat
+                     (map (comp tree-minimum-depth :tree)
+                          forest)))))
+
+(defn root-match?
+  [tree m]
+  (= (first (first tree)) m))
+
+(defn tree-minimum-depth-interaction
+  [tree v1 v2]
+  (if (leaf? tree) (list)
+      (if (root-match? tree v1)
+        (let [lmintree (tree-minimum-depth (second tree))
+              rmintree (tree-minimum-depth (third tree))
+              f (fn [mt] (if (contains? mt v2)
+                          (inc (first (mt v2)))
+                          nil))]
+          (concat (remove nil? (list (f lmintree) (f rmintree)))
+                  (tree-minimum-depth-interaction (second tree) v1 v2)
+                  (tree-minimum-depth-interaction (third tree) v1 v2)))
+        (concat (tree-minimum-depth-interaction (second tree) v1 v2)
+                (tree-minimum-depth-interaction (third tree) v1 v2)))))
+
+(defn minimum-depth-interaction
+  [forest v1 v2]
+  (map (comp #(tree-minimum-depth-interaction % v1 v2) :tree)
+       forest))
