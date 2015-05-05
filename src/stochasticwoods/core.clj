@@ -58,6 +58,15 @@
               (* (/ n2d ntot) s2))
            s1 s2)))
 
+;; (defn- combined-gini-score
+;;   [ltemap n1 gtmap n2 map_keys]
+;;   (let [n1d (double n1)
+;;         n2d (double n2)
+;;         ntot (+ n1d n2d)
+;;         s1 (double (internal-gini ltemap n1d map_keys))
+;;         s2 (double (internal-gini gtmap n2d map_keys))]
+;;     (list (* 0.5 (+ s1 s2)) s1 s2)))
+
 (defn- map-add!
   [m k v]
   (assoc! m k (+ v (get m k 0))))
@@ -232,7 +241,8 @@
   [a b]
   (let [ad (double a)
         bd (double b)]
-    (< (java.lang.Math/abs (- ad bd)) 1e-10)))
+    (< (java.lang.Math/abs (- ad bd)) 1e-12
+       )))
 
 (defn- min-or-zero
   [data]
@@ -256,7 +266,7 @@
     false
     true))
 
-(defn- infer-datatypes
+(defn infer-datatypes
   [cdata]
   (mapv (comp {true :categorical
                false :numeric}
@@ -335,20 +345,22 @@
          (list (list var split_val)
                (decision-tree lte_data vars_sel_fn gil split_fns)
                (decision-tree gt_data vars_sel_fn gig split_fns)))))))
-(defn sample-fn
-  [data]
-  (let [n (count data)
-        r (range n)]
-    (fn []
-      (sample-without-replacement r (int (/ n 2))))))
 
 (defn sample-fn
   [data]
   (let [n (count data)
         r (range n)]
     (fn []
-      (sample-with-replacement
-       r n))))
+      (sample-with-replacement r n))))
+
+;; (defn sample-fn
+;;   [data]
+;;   (let [n (count data)
+;;         r (range n)]
+;;     (fn []
+;;       (sample-without-replacement r (int (/ n 2))))))
+
+
 
 (defn grow-forest
   [data & {:keys [ntrees var_sample_fn decision_tree_fn]
@@ -412,7 +424,7 @@
          (fn [x] (= (get_fn x) split))
          (fn [x] (<= (get_fn x) split)))))))
 
-(defn- freqs-to-prob
+(defn freqs-to-prob
   [freqs]
   (let [n (double (apply + (map second freqs)))]
     (apply merge {}
@@ -438,6 +450,21 @@
           (if ((split_fn_generator (first t)) x)
             (recur (second t))
             (recur (second (rest t))))))))
+
+(defn predict-from-forest
+  [resolve_fn forest x]
+  (freqs-to-prob
+   (apply merge-with +
+          (map #(resolve_fn (:tree %) x) forest))))
+
+(defn predict-data-from-forest
+  ([forest data]
+   (predict-data-from-forest
+    (resolve-in-tree (split-fn-generator data)) forest data))
+  ([resolve_fn forest data]
+   (map (partial predict-from-forest resolve_fn forest)
+       data)))
+
 
 (defn oob-votes-tree
   ([data]
@@ -505,6 +532,7 @@
       (reduce #(mapv fast-merge-add %1 %2)
               (map pf forest))))))
 
+
 (defn classification-performance
   [predictions classifications category threshold]
   (frequencies
@@ -525,58 +553,138 @@
                   (- x2 x1)))]
     (apply + (map area (partition 2 1 spts)))))
 
-(defn classification-roc
-  [predictions classifications category]
-  (let [thresholds (map #(* 0.05 %) (range 20))
-        f_spec #(/ (get % :true-positpive 0)
-                   (+ (get % :true-positive 0)
-                      (get % :false-negative 0)))
-        fp_rate #(/ (get % :false-positive 0)
-                    (+ (get % :false-positive 0)
-                       (get % :true-negative 0)))]
-    (map (juxt fp_rate f_spec)
-         (map (partial classification-performance
-                       predictions
-                       classifications
-                       category)
-              thresholds))))
 
+;; (defn classification-roc
+;;   [predictions classifications category]
+;;   (let [thresholds (map #(* 0.05 %) (range 20))
+;;         f_spec #(/ (get % :true-positive 0)
+;;                    (+ (get % :true-positive 0)
+;;                       (get % :false-negative 0)))
+;;         fp_rate #(/ (get % :false-positive 0)
+;;                     (+ (get % :false-positive 0)
+;;                        (get % :true-negative 0)))]
+;;     (map ;;(juxt fp_rate f_spec)
+;;      (fn [x] (let [a (fp_rate x)
+;;                   b (f_spec x)]
+;;               (list a (max a b))))
+;;      (map (partial classification-performance
+;;                    predictions
+;;                    classifications
+;;                    category)
+;;           thresholds))))
+(defn special-div
+  [a b]
+  (if (zero? a) 0
+      (/ a b)))
+
+(defn- make-roc
+  [vals]
+  (loop [[[cx cy :as val] & svals] (sort-by second vals)
+         currx cx
+         curry cy
+         good [(first svals)]]
+    (cond
+      (nil? cx) good
+      (> cx currx) (recur svals cx cy (conj good val))
+      :else (recur svals currx curry good))))
 
 (defn classification-auc
   [predictions classifications category]
-  (let [thresholds (map #(* 0.05 %) (range 20))
-        f_spec #(/ (get % :true-positive 0)
-                   (+ (get % :true-positive 0)
-                      (get % :false-negative 0)))
+  (let [thresholds (map #(* 0.0001 %) (range 10000))
+        tp_rate #(/ (get % :true-positive 0)
+                    (+ (get % :true-positive 0)
+                       (get % :false-negative 0)))
         fp_rate #(/ (get % :false-positive 0)
                     (+ (get % :false-positive 0)
-                       (get % :true-negative 0)))]
-    (area-under-curve
-     (map (juxt fp_rate f_spec)
-          (map (partial classification-performance
-                        predictions
-                        classifications
-                        category)
-               thresholds)))))
+                       (get % :true-negative 0)))
+        vals (map ;;(juxt fp_rate f_spec)
+              (fn [x] (let [a (fp_rate x)
+                           b (tp_rate x)]
+                       (list a b)))
+              (map (partial classification-performance
+                            predictions
+                            classifications
+                            category)
+                   thresholds))]
+    (area-under-curve (make-roc vals))))
+;; (defn classification-auc
+;;   [predictions classifications category]
+;;   (let [thresholds (map #(* 0.0001 %) (range 10000))
+;;         tp_rate #(special-div (get % :true-positive 0)
+;;                               (+ (get % :true-positive 0)
+;;                                  (get % :false-negative 0)))
+;;         fp_rate #(special-div (get % :false-positive 0)
+;;                               (+ (get % :false-positive 0)
+;;                                  (get % :true-negative 0)))]
+;;     (area-under-curve
+;;      (map ;;(juxt fp_rate f_spec)
+;;       (fn [x] (let [a (fp_rate x)
+;;                    b (tp_rate x)]
+;;                (list a b)))
+;;           (map (partial classification-performance
+;;                         predictions
+;;                         classifications
+;;                         category)
+;;                thresholds)))))
 
-(defn tree-min-var-depth
-  ([tree] (tree-min-var-depth tree 1))
-  ([tree n]
-   (if (leaf? tree) {}
-       (let [[[v split] subtree1 subtree2] tree]
-         (merge-with #(list (min (first %1) (first %2)))
-                     {v (list n)}
-                     (tree-min-var-depth subtree1 (inc n))
-                     (tree-min-var-depth subtree2 (inc n)))))))
 
-(defn forest-mean-min-depth
-  [forest]
-  (let [mean (fn [l] (/ (apply + l) (count l)))
-        ftree (fn [t] (tree-min-var-depth (t :tree)))]
-    (apply merge
-           (map #(hash-map (first %) (mean (second %))) 
-                (apply merge-with concat
-                       (map ftree forest))))))
+(defn classification-roc
+  [predictions classifications category]
+  (let [thresholds (map #(* 0.0001 %) (range 10000))
+        tp_rate #(/ (get % :true-positive 0)
+                    (+ (get % :true-positive 0)
+                       (get % :false-negative 0)))
+        fp_rate #(/ (get % :false-positive 0)
+                    (+ (get % :false-positive 0)
+                       (get % :true-negative 0)))
+        vals (map ;;(juxt fp_rate f_spec)
+              (fn [x] (let [a (fp_rate x)
+                           b (tp_rate x)]
+                       (list a b)))
+              (map (partial classification-performance
+                            predictions
+                            classifications
+                            category)
+                   thresholds))]
+    (make-roc vals)))
+
+;; (defn classification-roc
+;;   [predictions classifications category]
+;;   (let [thresholds (map #(* 0.001 %) (range 1000))
+;;         tp_rate #(/ (get % :true-positive 0)
+;;                     (+ (get % :true-positive 0)
+;;                        (get % :false-negative 0)))
+;;         fp_rate #(/ (get % :false-positive 0)
+;;                     (+ (get % :false-positive 0)
+;;                        (get % :true-negative 0)))]
+;;     (map ;;(juxt fp_rate f_spec)
+;;      (fn [x] (let [a (fp_rate x)
+;;                   b (tp_rate x)]
+;;               (list a b)))
+;;      (map (partial classification-performance
+;;                    predictions
+;;                    classifications
+;;                    category)
+;;           thresholds))))
+
+;; (defn tree-min-var-depth
+;;   ([tree] (tree-min-var-depth tree 1))
+;;   ([tree n]
+;;    (if (leaf? tree) {}
+;;        (let [[[v split] subtree1 subtree2] tree]
+;;          (merge-with #(list (min (first %1) (first %2)))
+;;                      {v (list n)}
+;;                      (tree-min-var-depth subtree1 (inc n))
+;;                      (tree-min-var-depth subtree2 (inc n)))))))
+
+;; (defn forest-mean-min-depth
+;;   [forest]
+;;   (let [mean (fn [l] (/ (apply + l) (count l)))
+;;         ftree (fn [t] (tree-min-var-depth (t :tree)))]
+;;     (apply merge
+;;            (map #(hash-map (first %) (mean (second %))) 
+;;                 (apply merge-with concat
+;;                        (map ftree forest))))))
 
 
 (defn permute-var
@@ -634,6 +742,51 @@
                        (if (zero? n)
                          0 (/ (reduce + c) n))))
          vifn (memoize (variable-importance data))
+         vivar (fn [v] (list v (* nt_inv
+                                 (mean
+                                  (remove nil?
+                                          (map #((vifn %) v) woods))))))]
+     (pmap #(do (if (= 0 (mod %2 5000))
+                  (println %2))
+                (vivar %1))
+           variables (range)))))
+
+
+(defn var-importance
+  [data]
+  (let [;;orig (into #{} (range (count data)))
+        predfn (classify-in-tree (split-fn-generator data))
+        classfn (fn [tree d]
+                  (map #(= (second %) (predfn tree %)) d))]
+    (fn [{tree :tree features :features inbag :inbag-indices}]
+      (let [;;inds (clojure.set/difference orig inbag)
+            ;;origd (grab-data-in-order data inds)
+            countcorrectfn (fn [d] (count
+                                   (filter true? (classfn tree d))))
+            origcorrect (countcorrectfn data)]
+        (fn [variable]
+          (if (contains? features variable)
+            (* 0.25
+               (+ (- origcorrect
+                     (countcorrectfn (permute-var data variable)))
+                  (- origcorrect
+                     (countcorrectfn (permute-var data variable)))
+                  (- origcorrect
+                     (countcorrectfn (permute-var data variable)))
+                  (- origcorrect
+                     (countcorrectfn (permute-var data variable)))))))))))
+
+(defn all-vars-importance
+  ([forest data]
+   (all-vars-importance
+    forest data (range (count (first (first data))))))
+  ([forest data variables]
+   (let [nt_inv (/ 1.0 (count forest))
+         woods (associate-vars-in-forest forest)
+         mean (fn [c] (let [n (float (count c))]
+                       (if (zero? n)
+                         0 (/ (reduce + c) n))))
+         vifn (memoize (var-importance data))
          vivar (fn [v] (list v (* nt_inv
                                  (mean
                                   (remove nil?
@@ -759,15 +912,23 @@
                   [(* (last d) (/ (- ntot (dec (count d))) ntot))]
                   nil))))
 
-
 (defn tree-minimum-depth
   ([tree] (tree-minimum-depth tree 0))
   ([tree n]
    (if (leaf? tree) {}
-       (merge-with (partial min-key first)
-                   {(first (first tree)) (list n)}
-                   (tree-minimum-depth (second tree) (inc n))
-                   (tree-minimum-depth (third tree) (inc n))))))
+       (let [l (tree-minimum-depth (second tree) (inc n))
+             r (tree-minimum-depth (third tree) (inc n))]
+         (merge (merge-with concat l r)
+                {(first (first tree)) (list n)})))))
+
+;; (defn tree-minimum-depth
+;;   ([tree] (tree-minimum-depth tree 0))
+;;   ([tree n]
+;;    (if (leaf? tree) {}
+;;        (merge-with (partial min-key first)
+;;                    {(first (first tree)) (list n)}
+;;                    (tree-minimum-depth (second tree) (inc n))
+;;                    (tree-minimum-depth (third tree) (inc n))))))
 
 (defn- mymean
   [coll]
